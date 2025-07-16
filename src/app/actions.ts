@@ -1,8 +1,12 @@
 'use server';
 
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import bmp from 'bmp-js';
 import { parse } from 'gifuct-js';
+import mammoth from 'mammoth';
+import * as xlsx from 'xlsx';
+import JSZip from 'jszip';
+
 
 export async function mergePdfs(formData: FormData) {
   const files = formData.getAll('files') as File[];
@@ -30,6 +34,37 @@ export async function mergePdfs(formData: FormData) {
   }
 }
 
+async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
+    const page = pdfDoc.addPage();
+    const { width, height } = page.getSize();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    const fontSize = 12;
+    const margin = 50;
+    const textWidth = width - 2 * margin;
+
+    const lines = text.split('\n');
+    let y = height - margin;
+
+    for (const line of lines) {
+        if (y < margin) {
+            const newPage = pdfDoc.addPage();
+            page.setSize(width, height);
+            y = height - margin;
+        }
+        page.drawText(line, {
+            x: margin,
+            y,
+            font,
+            size: fontSize,
+            color: rgb(0, 0, 0),
+            maxWidth: textWidth,
+            lineHeight: 15,
+        });
+        y -= 15;
+    }
+}
+
+
 export async function convertToPdf(formData: FormData) {
   const files = formData.getAll('files') as File[];
 
@@ -42,38 +77,40 @@ export async function convertToPdf(formData: FormData) {
 
     for (const file of files) {
       const arrayBuffer = await file.arrayBuffer();
+      const fileType = file.type;
       
-      if (file.type.startsWith('image/')) {
+      if (fileType.startsWith('image/')) {
         let image;
-        if (file.type === 'image/jpeg') {
+        if (fileType === 'image/jpeg') {
           image = await newPdf.embedJpg(arrayBuffer);
-        } else if (file.type === 'image/png') {
+        } else if (fileType === 'image/png') {
           image = await newPdf.embedPng(arrayBuffer);
-        } else if (file.type === 'image/bmp') {
+        } else if (fileType === 'image/bmp') {
           const bmpData = bmp.decode(Buffer.from(arrayBuffer));
           image = await newPdf.embedPng(bmp.encode(bmpData).data);
-        } else if (file.type === 'image/gif') {
+        } else if (fileType === 'image/gif') {
             const gif = parse(arrayBuffer);
             const frames = gif.frames.filter(frame => frame.image);
             if (frames.length === 0) {
                 console.warn(`Could not extract frames from GIF: ${file.name}`);
                 continue;
             }
-            // Use the first frame of the GIF
             const frame = frames[0];
-            const { width, height, patch } = frame;
-            const frameImageData = new Uint8ClampedArray(patch);
+            const { width, height } = frame;
 
-            const pngData = await new Promise<Buffer>((resolve) => {
-                const chunks: Buffer[] = [];
-                // This is a simplified conversion, might need a proper PNG encoder library for complex GIFs
-                 const pngEncoder = new (require('pngjs').PNG)({ width, height });
-                 pngEncoder.data = Buffer.from(frameImageData);
-                 pngEncoder.pack().on('data', (chunk: Buffer) => chunks.push(chunk)).on('end', () => resolve(Buffer.concat(chunks)));
-            });
-            image = await newPdf.embedPng(pngData);
+            const canvas = new OffscreenCanvas(width, height);
+            const ctx = canvas.getContext('2d');
+            if(!ctx) continue;
+            
+            const imageData = ctx.createImageData(width, height);
+            imageData.data.set(new Uint8ClampedArray(frame.patch));
+            ctx.putImageData(imageData, 0, 0);
+
+            const blob = await canvas.convertToBlob({ type: 'image/png' });
+            const pngArrayBuffer = await blob.arrayBuffer();
+            image = await newPdf.embedPng(pngArrayBuffer);
         } else {
-            console.warn(`Unsupported image type for conversion: ${file.type}`);
+            console.warn(`Unsupported image type for conversion: ${fileType}`);
             return { success: false, error: `Image type for "${file.name}" is not supported.`};
         }
 
@@ -86,9 +123,44 @@ export async function convertToPdf(formData: FormData) {
             width: width,
             height: height,
         });
+      } else if (fileType.includes('word')) { // .doc, .docx
+          const { value } = await mammoth.extractRawText({ arrayBuffer });
+          await addTextToPdf(newPdf, value);
+      } else if (fileType.includes('excel') || fileType.includes('spreadsheet')) { // .xls, .xlsx
+          const workbook = xlsx.read(arrayBuffer, { type: 'buffer' });
+          let fullText = '';
+          workbook.SheetNames.forEach(sheetName => {
+              const sheet = workbook.Sheets[sheetName];
+              const text = xlsx.utils.sheet_to_txt(sheet);
+              fullText += `Sheet: ${sheetName}\n\n${text}\n\n`;
+          });
+          await addTextToPdf(newPdf, fullText);
+      } else if (fileType.includes('powerpoint') || fileType.includes('presentation')) { // .ppt, .pptx
+          try {
+            const zip = await JSZip.loadAsync(arrayBuffer);
+            let fullText = '';
+            const slidePromises: Promise<void>[] = [];
+
+            zip.folder('ppt/slides')?.forEach((relativePath, file) => {
+              if (file.name.endsWith('.xml')) {
+                  slidePromises.push(
+                      file.async('text').then(content => {
+                          const textNodes = content.match(/<a:t>.*?<\/a:t>/g) || [];
+                          const slideText = textNodes.map(node => node.replace(/<a:t>(.*?)<\/a:t>/, '$1')).join(' ');
+                          fullText += slideText + '\n';
+                      })
+                  );
+              }
+            });
+
+            await Promise.all(slidePromises);
+            await addTextToPdf(newPdf, fullText);
+          } catch(e) {
+            // Fallback for older .ppt or complex files
+            await addTextToPdf(newPdf, 'PowerPoint to PDF conversion is limited. Only text from .pptx files is extracted. Formatting and images are not preserved.');
+          }
       } else {
-        // For now, we only support images. We can add Office document conversion later.
-        console.warn(`Unsupported file type for conversion: ${file.type}`);
+        console.warn(`Unsupported file type for conversion: ${fileType}`);
         return { success: false, error: `File type for "${file.name}" is not supported for conversion.`};
       }
     }
@@ -100,6 +172,6 @@ export async function convertToPdf(formData: FormData) {
 
   } catch (error) {
     console.error(error);
-    return { success: false, error: 'Failed to convert files to PDF. Please ensure all files are valid images.' };
+    return { success: false, error: `Failed to convert files to PDF. Please ensure all files are valid and supported. Error: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
