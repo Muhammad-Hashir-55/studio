@@ -3,6 +3,7 @@ import { MergeTab } from './MergeTab';
 import { OfficeTab } from './OfficeTab';
 import { ImageTab } from './ImageTab';
 import { FileUp, Images, MergeIcon } from 'lucide-react';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 
 export function PdfTool() {
   return (
@@ -12,10 +13,19 @@ export function PdfTool() {
           <MergeIcon className="mr-2 h-5 w-5" />
           Merge PDFs
         </TabsTrigger>
-        <TabsTrigger value="office-to-pdf" className="py-2.5">
-          <FileUp className="mr-2 h-5 w-5" />
-          Office to PDF
-        </TabsTrigger>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <TabsTrigger value="office-to-pdf" className="py-2.5" disabled>
+                <FileUp className="mr-2 h-5 w-5" />
+                Office to PDF
+              </TabsTrigger>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>This feature is coming soon!</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
         <TabsTrigger value="image-to-pdf" className="py-2.5">
           <Images className="mr-2 h-5 w-5" />
           Images to PDF
