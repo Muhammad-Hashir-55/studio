@@ -1,4 +1,3 @@
-// @ts-nocheck
 'use client';
 
 import React, { useState, useCallback } from 'react';
@@ -100,7 +99,7 @@ export function ProcessingTab({
                 <div className="flex flex-col items-center gap-4">
                     <p className="text-muted-foreground">Click the button below to download your new PDF.</p>
                     <Button asChild size="lg" className="shadow-md">
-                        <a href={resultUrl} download>
+                        <a href={resultUrl} download="processed-file.pdf">
                             <Download className="mr-2 h-5 w-5" />
                             Download PDF
                         </a>
