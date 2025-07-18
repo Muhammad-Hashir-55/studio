@@ -18,7 +18,7 @@ export default function Home() {
         <PdfTool />
       </main>
       <footer className="mt-8 md:mt-12 text-center text-sm text-muted-foreground">
-        <p>&copy; {new Date().getFullYear()} PDFusion. All rights reserved.</p>
+        <p>&copy; {new Date().getFullYear()} PDFBlend. All rights reserved.</p>
       </footer>
     </div>
   );
