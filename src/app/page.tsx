@@ -9,7 +9,7 @@ export default function Home() {
         <div className="inline-flex items-center justify-center bg-primary text-primary-foreground p-3 rounded-full mb-4 shadow-lg">
           <Merge className="w-8 h-8" />
         </div>
-        <h1 className="text-4xl md:text-5xl font-bold text-primary font-headline tracking-tight">PDFusion</h1>
+        <h1 className="text-4xl md:text-5xl font-bold text-primary font-headline tracking-tight">PDFBlend</h1>
         <p className="text-muted-foreground mt-2 text-lg md:text-xl max-w-2xl mx-auto">
           Your complete toolkit for PDF management. Merge multiple PDFs, or convert Office documents and images into a single, polished PDF file.
         </p>
