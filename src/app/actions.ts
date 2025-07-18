@@ -7,24 +7,6 @@ import mammoth from 'mammoth';
 import * as xlsx from 'xlsx';
 import JSZip from 'jszip';
 import { PNG } from 'pngjs';
-import fs from 'fs/promises';
-import path from 'path';
-
-let dejavuFont: Buffer | null = null;
-async function getFont() {
-  if (dejavuFont) {
-    return dejavuFont;
-  }
-  const fontPath = path.join(process.cwd(), 'public', 'fonts', 'DejaVuSans.ttf');
-  try {
-    dejavuFont = await fs.readFile(fontPath);
-    return dejavuFont;
-  } catch (error) {
-    console.error('Failed to load font. Using standard font as fallback.', error);
-    // Fallback or handle error appropriately
-    return null;
-  }
-}
 
 
 export async function mergePdfs(formData: FormData) {
@@ -55,44 +37,44 @@ export async function mergePdfs(formData: FormData) {
 }
 
 async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
-    const fontBytes = await getFont();
-    const customFont = fontBytes ? await pdfDoc.embedFont(fontBytes, { subset: true }) : await pdfDoc.embedFont(StandardFonts.Helvetica);
+    // Sanitize text to remove characters not supported by WinAnsi encoding
+    const sanitizedText = text.replace(/[^\x00-\x7F]/g, '');
 
     let page = pdfDoc.addPage();
     const { width, height } = page.getSize();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontSize = 12;
     const lineHeight = 15;
     const margin = 50;
     const textWidth = width - 2 * margin;
     let y = height - margin;
 
-    const lines = text.split('\n');
+    const lines = sanitizedText.split('\n');
     for (const line of lines) {
-        if (y < margin + lineHeight) {
-          page = pdfDoc.addPage();
-          y = page.getHeight() - margin;
-        }
-
         const words = line.split(' ');
         let currentLine = '';
         for (const word of words) {
             const potentialLine = currentLine + (currentLine ? ' ' : '') + word;
-            const currentWidth = customFont.widthOfTextAtSize(potentialLine, fontSize);
+            const currentWidth = font.widthOfTextAtSize(potentialLine, fontSize);
 
             if (currentWidth > textWidth) {
-                page.drawText(currentLine, { x: margin, y, font: customFont, size: fontSize, color: rgb(0, 0, 0) });
-                y -= lineHeight;
-                currentLine = word;
                 if (y < margin + lineHeight) {
                     page = pdfDoc.addPage();
                     y = page.getHeight() - margin;
                 }
+                page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
+                y -= lineHeight;
+                currentLine = word;
             } else {
                 currentLine = potentialLine;
             }
         }
         
-        page.drawText(currentLine, { x: margin, y, font: customFont, size: fontSize, color: rgb(0, 0, 0) });
+        if (y < margin + lineHeight) {
+            page = pdfDoc.addPage();
+            y = page.getHeight() - margin;
+        }
+        page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
         y -= lineHeight;
     }
 }
@@ -121,7 +103,16 @@ export async function convertToPdf(formData: FormData) {
         } else if (fileType === 'image/bmp') {
           const bmpData = bmp.decode(Buffer.from(arrayBuffer));
           const png = new PNG({ width: bmpData.width, height: bmpData.height });
-          png.data = bmpData.data;
+          for (let i = 0; i < bmpData.data.length; i += 4) {
+              const a = bmpData.data[i];
+              const b = bmpData.data[i + 1];
+              const g = bmpData.data[i + 2];
+              const r = bmpData.data[i + 3];
+              png.data[i] = r;
+              png.data[i + 1] = g;
+              png.data[i + 2] = b;
+              png.data[i + 3] = a;
+          }
           const pngBuffer = PNG.sync.write(png);
           image = await newPdf.embedPng(pngBuffer);
         } else if (fileType === 'image/gif') {
@@ -132,37 +123,32 @@ export async function convertToPdf(formData: FormData) {
             }
             
             for (const frame of gif.frames) {
-                const patch = frame.patch;
-                const png = new PNG({ width: patch.width, height: patch.height });
-                
-                const rgba = new Uint8ClampedArray(patch.width * patch.height * 4);
-                let patchIdx = 0;
-                for (let i = 0; i < frame.pixels.length; i++) {
-                    const colorIndex = frame.pixels[i];
-                    if (colorIndex === frame.transparentIndex) {
-                        const idx = patchIdx * 4;
+                const { width, height, data: frameData } = frame.patch;
+                const png = new PNG({ width, height });
+
+                const rgba = new Uint8ClampedArray(width * height * 4);
+                frame.pixels.forEach((pixel, i) => {
+                    if (gif.colorTable[pixel]) {
+                        const [r, g, b] = gif.colorTable[pixel];
+                        const idx = i * 4;
+                        rgba[idx] = r;
+                        rgba[idx + 1] = g;
+                        rgba[idx + 2] = b;
+                        rgba[idx + 3] = 255; // Alpha
+                    } else if (pixel === frame.transparentIndex) {
+                        const idx = i * 4;
                         rgba[idx] = 0;
-                        rgba[idx+1] = 0;
-                        rgba[idx+2] = 0;
-                        rgba[idx+3] = 0; // transparent
-                    } else {
-                        const color = gif.colorTable[colorIndex];
-                        if (color) {
-                            const idx = patchIdx * 4;
-                            rgba[idx] = color[0];
-                            rgba[idx+1] = color[1];
-                            rgba[idx+2] = color[2];
-                            rgba[idx+3] = 255; // Opaque
-                        }
+                        rgba[idx + 1] = 0;
+                        rgba[idx + 2] = 0;
+                        rgba[idx + 3] = 0; // Transparent
                     }
-                    patchIdx++;
-                }
-                
+                });
+
                 png.data = Buffer.from(rgba);
                 const pngBuffer = PNG.sync.write(png);
                 const embeddedImage = await newPdf.embedPng(pngBuffer);
                 const page = newPdf.addPage([frame.dims.width, frame.dims.height]);
-                page.drawImage(embeddedImage, { x: frame.dims.left, y: page.getHeight() - frame.dims.top - patch.height, width: patch.width, height: patch.height });
+                page.drawImage(embeddedImage, { x: 0, y: 0, width: frame.dims.width, height: frame.dims.height });
             }
             continue;
         } else {
@@ -196,26 +182,22 @@ export async function convertToPdf(formData: FormData) {
             const zip = await JSZip.loadAsync(arrayBuffer);
             let fullText = '';
             const slidePromises: Promise<void>[] = [];
-            const slideFiles: { [key: string]: JSZip.JSZipObject } = {};
 
             zip.folder('ppt/slides')?.forEach((relativePath, file) => {
               if (file.name.endsWith('.xml') && !file.name.includes('rels')) {
-                const slideNum = parseInt(file.name.match(/slide(\d+)\.xml/)?.[1] || '0', 10);
-                slideFiles[slideNum] = file;
+                  slidePromises.push(
+                      file.async('text').then(content => {
+                          const textNodes = content.match(/<a:t>.*?<\/a:t>/g) || [];
+                          const slideText = textNodes.map(node => node.replace(/<a:t>(.*?)<\/a:t>/, '$1')).join(' ');
+                          if (slideText.trim()) {
+                            fullText += slideText + '\n\n';
+                          }
+                      })
+                  );
               }
             });
 
-            const sortedSlideKeys = Object.keys(slideFiles).sort((a,b) => parseInt(a) - parseInt(b));
-
-            for(const key of sortedSlideKeys){
-              const content = await slideFiles[key].async('text');
-              const textNodes = content.match(/<a:t>.*?<\/a:t>/g) || [];
-              const slideText = textNodes.map(node => node.replace(/<.*?>/g, '')).join(' ');
-              if (slideText.trim()) {
-                fullText += `Slide ${key}\n\n${slideText}\n\n`;
-              }
-            }
-
+            await Promise.all(slidePromises);
             if(fullText.trim()){
               await addTextToPdf(newPdf, fullText);
             } else {
@@ -243,36 +225,5 @@ export async function convertToPdf(formData: FormData) {
     console.error('Conversion Error:', error);
     const errorMessage = error instanceof Error ? error.message : String(error);
     return { success: false, error: `Failed to convert files to PDF. Details: ${errorMessage}` };
-  }
-}
-
-// This function will be called from next.config.js
-export async function downloadFont() {
-  const fontUrl = 'https://github.com/dejavu-fonts/dejavu-fonts/raw/master/ttf/DejaVuSans.ttf';
-  const fontDir = path.join(process.cwd(), 'public', 'fonts');
-  const fontPath = path.join(fontDir, 'DejaVuSans.ttf');
-  
-  try {
-      await fs.access(fontDir);
-  } catch (error) {
-      await fs.mkdir(fontDir, { recursive: true });
-  }
-
-  try {
-    // Check if font already exists
-    await fs.access(fontPath);
-    console.log('Font already exists. Skipping download.');
-    return;
-  } catch (error) {
-    // Font does not exist, download it
-    console.log('Downloading DejaVuSans font...');
-    const fetch = (await import('node-fetch')).default;
-    const response = await fetch(fontUrl);
-    if (!response.ok) {
-        throw new Error(`Failed to download font: ${response.statusText}`);
-    }
-    const arrayBuffer = await response.arrayBuffer();
-    await fs.writeFile(fontPath, Buffer.from(arrayBuffer));
-    console.log('Font downloaded successfully.');
   }
 }

@@ -20,12 +20,4 @@ const nextConfig: NextConfig = {
   },
 };
 
-async function setup() {
-  if (process.env.NODE_ENV === 'development' || process.env.NEXT_PHASE === 'phase-production-build') {
-    const { downloadFont } = await import('./src/app/actions');
-    await downloadFont();
-  }
-  return nextConfig;
-}
-
-export default setup();
+export default nextConfig;
