@@ -110,27 +110,26 @@ export async function convertToPdf(formData: FormData) {
           const pngBuffer = PNG.sync.write(png);
           image = await newPdf.embedPng(pngBuffer);
         } else if (fileType === 'image/gif') {
-            const gif = parse(Buffer.from(arrayBuffer));
+            const gif = parse(arrayBuffer);
             if (!gif.frames || gif.frames.length === 0) {
                 console.warn(`Could not extract frames from GIF: ${file.name}`);
                 continue;
             }
-            // For GIFs, let's embed each frame as a separate page
-            for (const frame of gif.frames) {
-                const { width, height } = frame.dims;
-                const png = new PNG({ width, height });
-                
-                const patch = new Uint8Array(frame.patch);
-                for(let i = 0; i < patch.length; i++){
-                    png.data[i] = patch[i];
-                }
+            const frame = gif.frames[0]; // Using only the first frame
+            const { width, height } = frame.dims;
 
-                const pngBuffer = PNG.sync.write(png);
-                const embeddedImage = await newPdf.embedPng(pngBuffer);
-                const page = newPdf.addPage([width, height]);
-                page.drawImage(embeddedImage, { x: 0, y: 0, width, height });
+            const png = new PNG({ width, height });
+            
+            const patch = new Uint8ClampedArray(frame.patch);
+            for(let i = 0; i < patch.length / 4; i++){
+                png.data[i*4] = patch[i*4];
+                png.data[i*4+1] = patch[i*4+1];
+                png.data[i*4+2] = patch[i*4+2];
+                png.data[i*4+3] = patch[i*4+3];
             }
-            continue; // Skip the single image drawing logic below
+            
+            const pngBuffer = PNG.sync.write(png);
+            image = await newPdf.embedPng(pngBuffer);
         } else {
             console.warn(`Unsupported image type for conversion: ${fileType}`);
             return { success: false, error: `Image type for "${file.name}" is not supported.`};
