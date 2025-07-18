@@ -3,7 +3,7 @@ import './globals.css';
 import { Toaster } from '@/components/ui/toaster';
 
 export const metadata: Metadata = {
-  title: 'PDBlend',
+  title: 'PDFBlend',
   description: 'Merge and convert to PDFs with ease.',
 };
 
