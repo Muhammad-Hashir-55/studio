@@ -53,18 +53,14 @@ async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
         const potentialLine = currentLine + word;
         const currentWidth = font.widthOfTextAtSize(potentialLine, fontSize);
 
-        if (currentWidth > textWidth) {
+        if (currentWidth > textWidth && currentLine.length > 0) {
             page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
             y -= lineHeight;
             currentLine = word.trimStart();
 
             if (y < margin) {
-                // This logic is flawed, so for now, we just add a new page and continue.
-                // In a real app, we would need to handle this more gracefully.
                 const newPage = pdfDoc.addPage();
                 y = newPage.getHeight() - margin;
-                // Since we're on a new page, we can't just draw on the old one.
-                // This is a simplification and might lead to text being cut off.
             }
         } else {
             currentLine = potentialLine;
@@ -115,15 +111,15 @@ export async function convertToPdf(formData: FormData) {
           image = await newPdf.embedPng(pngBuffer);
         } else if (fileType === 'image/gif') {
             const gif = parse(arrayBuffer);
-            const frames = gif.frames.filter((frame: any) => frame.image);
-            if (frames.length === 0) {
+            if (!gif.frames || gif.frames.length === 0) {
                 console.warn(`Could not extract frames from GIF: ${file.name}`);
                 continue;
             }
-            const frame = frames[0];
+            const frame = gif.frames[0]; // Using only the first frame
             const { width, height } = frame.dims;
 
             const png = new PNG({ width, height });
+            
             const patch = new Uint8ClampedArray(frame.patch);
             for(let i = 0; i < patch.length / 4; i++){
                 png.data[i*4] = patch[i*4];
