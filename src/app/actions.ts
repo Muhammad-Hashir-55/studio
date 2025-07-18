@@ -37,7 +37,9 @@ export async function mergePdfs(formData: FormData) {
 }
 
 async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
-    // Always add a new page for new text content to avoid conflicts.
+    // Sanitize text to remove characters not supported by WinAnsi encoding
+    const sanitizedText = text.replace(/[^\x00-\x7F]/g, '');
+
     let page = pdfDoc.addPage();
     const { width, height } = page.getSize();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -47,7 +49,7 @@ async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
     const textWidth = width - 2 * margin;
     let y = height - margin;
 
-    const lines = text.split('\n');
+    const lines = sanitizedText.split('\n');
     for (const line of lines) {
         const words = line.split(' ');
         let currentLine = '';
@@ -56,7 +58,6 @@ async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
             const currentWidth = font.widthOfTextAtSize(potentialLine, fontSize);
 
             if (currentWidth > textWidth) {
-                // Draw the current line and start a new one
                 if (y < margin + lineHeight) {
                     page = pdfDoc.addPage();
                     y = page.getHeight() - margin;
@@ -69,7 +70,6 @@ async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
             }
         }
         
-        // Draw the last line of the paragraph
         if (y < margin + lineHeight) {
             page = pdfDoc.addPage();
             y = page.getHeight() - margin;
@@ -103,7 +103,6 @@ export async function convertToPdf(formData: FormData) {
         } else if (fileType === 'image/bmp') {
           const bmpData = bmp.decode(Buffer.from(arrayBuffer));
           const png = new PNG({ width: bmpData.width, height: bmpData.height });
-          // The bmp-js library provides data in ABGR format, PNG needs RGBA.
           for (let i = 0; i < bmpData.data.length; i += 4) {
               const a = bmpData.data[i];
               const b = bmpData.data[i + 1];
@@ -127,7 +126,6 @@ export async function convertToPdf(formData: FormData) {
                 const { width, height, data: frameData } = frame.patch;
                 const png = new PNG({ width, height });
 
-                // Create a full RGBA buffer for the frame
                 const rgba = new Uint8ClampedArray(width * height * 4);
                 frame.pixels.forEach((pixel, i) => {
                     if (gif.colorTable[pixel]) {
@@ -137,6 +135,12 @@ export async function convertToPdf(formData: FormData) {
                         rgba[idx + 1] = g;
                         rgba[idx + 2] = b;
                         rgba[idx + 3] = 255; // Alpha
+                    } else if (pixel === frame.transparentIndex) {
+                        const idx = i * 4;
+                        rgba[idx] = 0;
+                        rgba[idx + 1] = 0;
+                        rgba[idx + 2] = 0;
+                        rgba[idx + 3] = 0; // Transparent
                     }
                 });
 
@@ -146,7 +150,7 @@ export async function convertToPdf(formData: FormData) {
                 const page = newPdf.addPage([frame.dims.width, frame.dims.height]);
                 page.drawImage(embeddedImage, { x: 0, y: 0, width: frame.dims.width, height: frame.dims.height });
             }
-            continue; // Skip the single image drawing logic below
+            continue;
         } else {
             console.warn(`Unsupported image type for conversion: ${fileType}`);
             return { success: false, error: `Image type for "${file.name}" is not supported.`};
@@ -161,10 +165,10 @@ export async function convertToPdf(formData: FormData) {
             width: width,
             height: height,
         });
-      } else if (fileType.includes('word')) { // .doc, .docx
+      } else if (fileType.includes('word')) {
           const { value } = await mammoth.extractRawText({ arrayBuffer });
           await addTextToPdf(newPdf, value);
-      } else if (fileType.includes('excel') || fileType.includes('spreadsheet')) { // .xls, .xlsx
+      } else if (fileType.includes('excel') || fileType.includes('spreadsheetml.sheet')) {
           const workbook = xlsx.read(arrayBuffer, { type: 'buffer' });
           let fullText = '';
           for (const sheetName of workbook.SheetNames) {
@@ -173,7 +177,7 @@ export async function convertToPdf(formData: FormData) {
               fullText += `Sheet: ${sheetName}\n\n${text}\n\n`;
           }
           await addTextToPdf(newPdf, fullText);
-      } else if (fileType.includes('powerpoint') || fileType.includes('presentation')) { // .ppt, .pptx
+      } else if (fileType.includes('powerpoint') || fileType.includes('presentation')) {
           try {
             const zip = await JSZip.loadAsync(arrayBuffer);
             let fullText = '';
@@ -203,7 +207,7 @@ export async function convertToPdf(formData: FormData) {
             await addTextToPdf(newPdf, 'PowerPoint to PDF conversion is limited. Only text from .pptx files is extracted. Formatting and images are not preserved.');
           }
       } else {
-        console.warn(`Unsupported file type for conversion: ${fileType}`);
+        console.warn(`Unsupported file type for conversion: ${file.name} (${fileType})`);
         return { success: false, error: `File type for "${file.name}" is not supported for conversion.`};
       }
     }
