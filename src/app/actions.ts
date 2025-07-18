@@ -36,6 +36,7 @@ export async function mergePdfs(formData: FormData) {
 }
 
 async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
+    // Always add a new page for new text content to avoid conflicts.
     const page = pdfDoc.addPage();
     const { width, height } = page.getSize();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -48,23 +49,20 @@ async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
 
     const words = text.split(/(\s+)/);
     let currentLine = '';
-    
+    let currentPage = page;
+
     for (const word of words) {
         const potentialLine = currentLine + word;
         const currentWidth = font.widthOfTextAtSize(potentialLine, fontSize);
 
         if (currentWidth > textWidth) {
-            page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
+            currentPage.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
             y -= lineHeight;
             currentLine = word.trimStart();
 
             if (y < margin) {
-                // This logic is flawed, so for now, we just add a new page and continue.
-                // In a real app, we would need to handle this more gracefully.
-                const newPage = pdfDoc.addPage();
-                y = newPage.getHeight() - margin;
-                // Since we're on a new page, we can't just draw on the old one.
-                // This is a simplification and might lead to text being cut off.
+                currentPage = pdfDoc.addPage();
+                y = height - margin;
             }
         } else {
             currentLine = potentialLine;
@@ -72,7 +70,7 @@ async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
     }
 
     if (currentLine.trim() !== '') {
-        page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
+        currentPage.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
     }
 }
 
@@ -120,18 +118,20 @@ export async function convertToPdf(formData: FormData) {
                 console.warn(`Could not extract frames from GIF: ${file.name}`);
                 continue;
             }
-            const frame = frames[0];
+            // Use only the first frame of the GIF
+            const frame = frames[0]; 
             const { width, height } = frame.dims;
 
             const png = new PNG({ width, height });
-            const patch = new Uint8ClampedArray(frame.patch);
-            for(let i = 0; i < patch.length / 4; i++){
-                png.data[i*4] = patch[i*4];
-                png.data[i*4+1] = patch[i*4+1];
-                png.data[i*4+2] = patch[i*4+2];
-                png.data[i*4+3] = patch[i*4+3];
-            }
             
+            // Create a full RGBA buffer from the patch
+            const patch = new Uint8ClampedArray(frame.patch);
+            const fullPixelData = new Uint8ClampedArray(width * height * 4);
+            for(let i = 0; i < patch.length; i++){
+                fullPixelData[i] = patch[i];
+            }
+            png.data = Buffer.from(fullPixelData);
+
             const pngBuffer = PNG.sync.write(png);
             image = await newPdf.embedPng(pngBuffer);
         } else {
