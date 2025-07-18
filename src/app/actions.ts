@@ -37,6 +37,7 @@ export async function mergePdfs(formData: FormData) {
 }
 
 async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
+    // Always add a new page for new text content to avoid conflicts.
     let page = pdfDoc.addPage();
     const { width, height } = page.getSize();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
@@ -129,12 +130,14 @@ export async function convertToPdf(formData: FormData) {
                 // Create a full RGBA buffer for the frame
                 const rgba = new Uint8ClampedArray(width * height * 4);
                 frame.pixels.forEach((pixel, i) => {
-                    const [r, g, b] = gif.colorTable[pixel];
-                    const idx = i * 4;
-                    rgba[idx] = r;
-                    rgba[idx + 1] = g;
-                    rgba[idx + 2] = b;
-                    rgba[idx + 3] = 255; // Alpha
+                    if (gif.colorTable[pixel]) {
+                        const [r, g, b] = gif.colorTable[pixel];
+                        const idx = i * 4;
+                        rgba[idx] = r;
+                        rgba[idx + 1] = g;
+                        rgba[idx + 2] = b;
+                        rgba[idx + 3] = 255; // Alpha
+                    }
                 });
 
                 png.data = Buffer.from(rgba);
