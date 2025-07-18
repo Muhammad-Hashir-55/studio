@@ -3,8 +3,8 @@ import './globals.css';
 import { Toaster } from '@/components/ui/toaster';
 
 export const metadata: Metadata = {
-  title: 'PDFusion',
-  description: 'Merge and convert PDFs with ease.',
+  title: 'PDBlend',
+  description: 'Merge and convert to PDFs with ease.',
 };
 
 export default function RootLayout({
