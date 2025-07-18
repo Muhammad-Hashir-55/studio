@@ -31,44 +31,50 @@ export async function mergePdfs(formData: FormData) {
     return { success: true, downloadUrl: `data:application/pdf;base64,${mergedPdfBase64}` };
   } catch (error) {
     console.error(error);
-    return { success: false, error: 'Failed to merge PDFs. Please ensure all files are valid PDFs.' };
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { success: false, error: `Failed to merge PDFs. Please ensure all files are valid PDFs. Details: ${errorMessage}` };
   }
 }
 
 async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
-    const page = pdfDoc.addPage();
+    let page = pdfDoc.addPage();
     const { width, height } = page.getSize();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontSize = 12;
     const lineHeight = 15;
     const margin = 50;
     const textWidth = width - 2 * margin;
-
     let y = height - margin;
 
-    const words = text.split(/(\s+)/);
-    let currentLine = '';
-    
-    for (const word of words) {
-        const potentialLine = currentLine + word;
-        const currentWidth = font.widthOfTextAtSize(potentialLine, fontSize);
+    const lines = text.split('\n');
+    for (const line of lines) {
+        const words = line.split(' ');
+        let currentLine = '';
+        for (const word of words) {
+            const potentialLine = currentLine + (currentLine ? ' ' : '') + word;
+            const currentWidth = font.widthOfTextAtSize(potentialLine, fontSize);
 
-        if (currentWidth > textWidth && currentLine.length > 0) {
-            page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
-            y -= lineHeight;
-            currentLine = word.trimStart();
-
-            if (y < margin) {
-                const newPage = pdfDoc.addPage();
-                y = newPage.getHeight() - margin;
+            if (currentWidth > textWidth) {
+                // Draw the current line and start a new one
+                if (y < margin + lineHeight) {
+                    page = pdfDoc.addPage();
+                    y = page.getHeight() - margin;
+                }
+                page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
+                y -= lineHeight;
+                currentLine = word;
+            } else {
+                currentLine = potentialLine;
             }
-        } else {
-            currentLine = potentialLine;
         }
-    }
-
-    if (currentLine.trim() !== '') {
+        
+        // Draw the last line of the paragraph
+        if (y < margin + lineHeight) {
+            page = pdfDoc.addPage();
+            y = page.getHeight() - margin;
+        }
         page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
+        y -= lineHeight;
     }
 }
 
@@ -115,20 +121,27 @@ export async function convertToPdf(formData: FormData) {
                 console.warn(`Could not extract frames from GIF: ${file.name}`);
                 continue;
             }
-            // For GIFs, let's embed each frame as a separate page
+            
             for (const frame of gif.frames) {
-                const { width, height } = frame.dims;
+                const { width, height, data: frameData } = frame.patch;
                 const png = new PNG({ width, height });
-                
-                const patch = new Uint8Array(frame.patch);
-                for(let i = 0; i < patch.length; i++){
-                    png.data[i] = patch[i];
-                }
 
+                // Create a full RGBA buffer for the frame
+                const rgba = new Uint8ClampedArray(width * height * 4);
+                frame.pixels.forEach((pixel, i) => {
+                    const [r, g, b] = gif.colorTable[pixel];
+                    const idx = i * 4;
+                    rgba[idx] = r;
+                    rgba[idx + 1] = g;
+                    rgba[idx + 2] = b;
+                    rgba[idx + 3] = 255; // Alpha
+                });
+
+                png.data = Buffer.from(rgba);
                 const pngBuffer = PNG.sync.write(png);
                 const embeddedImage = await newPdf.embedPng(pngBuffer);
-                const page = newPdf.addPage([width, height]);
-                page.drawImage(embeddedImage, { x: 0, y: 0, width, height });
+                const page = newPdf.addPage([frame.dims.width, frame.dims.height]);
+                page.drawImage(embeddedImage, { x: 0, y: 0, width: frame.dims.width, height: frame.dims.height });
             }
             continue; // Skip the single image drawing logic below
         } else {
@@ -202,7 +215,8 @@ export async function convertToPdf(formData: FormData) {
     return { success: true, downloadUrl: `data:application/pdf;base64,${newPdfBase64}` };
 
   } catch (error) {
-    console.error(error);
-    return { success: false, error: `Failed to convert files to PDF. Please ensure all files are valid and supported. Error: ${error instanceof Error ? error.message : String(error)}` };
+    console.error('Conversion Error:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { success: false, error: `Failed to convert files to PDF. Details: ${errorMessage}` };
   }
 }
