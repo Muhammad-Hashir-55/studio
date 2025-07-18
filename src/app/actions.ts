@@ -36,10 +36,8 @@ export async function mergePdfs(formData: FormData) {
 }
 
 async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
-    let page = pdfDoc.getPageCount() > 0 ? pdfDoc.getPage(pdfDoc.getPageCount() -1) : pdfDoc.addPage();
-    if (pdfDoc.getPageCount() === 0) {
-        page = pdfDoc.addPage();
-    }
+    // Always add a new page for new text content to avoid conflicts.
+    const page = pdfDoc.addPage();
     const { width, height } = page.getSize();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontSize = 12;
@@ -49,27 +47,21 @@ async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
 
     let y = height - margin;
 
-    // If the last page already has content, start from a new page
-    if (page.getOperations().length > 2) { // more than just basic page setup
-      page = pdfDoc.addPage();
-      y = height - margin;
-    }
-
-
     const words = text.split(/(\s+)/);
     let currentLine = '';
+    let currentPage = page;
 
     for (const word of words) {
         const potentialLine = currentLine + word;
         const currentWidth = font.widthOfTextAtSize(potentialLine, fontSize);
 
         if (currentWidth > textWidth) {
-            page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
+            currentPage.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
             y -= lineHeight;
             currentLine = word.trimStart();
 
             if (y < margin) {
-                page = pdfDoc.addPage();
+                currentPage = pdfDoc.addPage();
                 y = height - margin;
             }
         } else {
@@ -78,7 +70,7 @@ async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
     }
 
     if (currentLine.trim() !== '') {
-        page.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
+        currentPage.drawText(currentLine, { x: margin, y, font, size: fontSize, color: rgb(0, 0, 0) });
     }
 }
 
@@ -126,12 +118,20 @@ export async function convertToPdf(formData: FormData) {
                 console.warn(`Could not extract frames from GIF: ${file.name}`);
                 continue;
             }
-            const frame = frames[0];
+            // Use only the first frame of the GIF
+            const frame = frames[0]; 
             const { width, height } = frame.dims;
 
             const png = new PNG({ width, height });
-            // frame.patch is a byte array of the frame's pixel data
-            png.data = Buffer.from(frame.patch);
+            
+            // Create a full RGBA buffer from the patch
+            const patch = new Uint8ClampedArray(frame.patch);
+            const fullPixelData = new Uint8ClampedArray(width * height * 4);
+            for(let i = 0; i < patch.length; i++){
+                fullPixelData[i] = patch[i];
+            }
+            png.data = Buffer.from(fullPixelData);
+
             const pngBuffer = PNG.sync.write(png);
             image = await newPdf.embedPng(pngBuffer);
         } else {
@@ -167,13 +167,13 @@ export async function convertToPdf(formData: FormData) {
             const slidePromises: Promise<void>[] = [];
 
             zip.folder('ppt/slides')?.forEach((relativePath, file) => {
-              if (file.name.endsWith('.xml')) {
+              if (file.name.endsWith('.xml') && !file.name.includes('rels')) {
                   slidePromises.push(
                       file.async('text').then(content => {
                           const textNodes = content.match(/<a:t>.*?<\/a:t>/g) || [];
                           const slideText = textNodes.map(node => node.replace(/<a:t>(.*?)<\/a:t>/, '$1')).join(' ');
                           if (slideText.trim()) {
-                            fullText += slideText + '\n\n'; // Add newlines between slides
+                            fullText += slideText + '\n\n';
                           }
                       })
                   );
@@ -187,13 +187,16 @@ export async function convertToPdf(formData: FormData) {
               await addTextToPdf(newPdf, 'No text content could be extracted from this PowerPoint file.');
             }
           } catch(e) {
-            // Fallback for older .ppt or complex files
             await addTextToPdf(newPdf, 'PowerPoint to PDF conversion is limited. Only text from .pptx files is extracted. Formatting and images are not preserved.');
           }
       } else {
         console.warn(`Unsupported file type for conversion: ${fileType}`);
         return { success: false, error: `File type for "${file.name}" is not supported for conversion.`};
       }
+    }
+
+    if (newPdf.getPageCount() === 0) {
+      return { success: false, error: 'Could not create a PDF. The file might be empty or unsupported.' };
     }
 
     const newPdfBytes = await newPdf.save();
