@@ -36,7 +36,10 @@ export async function mergePdfs(formData: FormData) {
 }
 
 async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
-    let page = pdfDoc.addPage();
+    let page = pdfDoc.getPageCount() > 0 ? pdfDoc.getPage(pdfDoc.getPageCount() -1) : pdfDoc.addPage();
+    if (pdfDoc.getPageCount() === 0) {
+        page = pdfDoc.addPage();
+    }
     const { width, height } = page.getSize();
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const fontSize = 12;
@@ -44,8 +47,16 @@ async function addTextToPdf(pdfDoc: PDFDocument, text: string) {
     const margin = 50;
     const textWidth = width - 2 * margin;
 
-    const words = text.split(/(\s+)/);
     let y = height - margin;
+
+    // If the last page already has content, start from a new page
+    if (page.getOperations().length > 2) { // more than just basic page setup
+      page = pdfDoc.addPage();
+      y = height - margin;
+    }
+
+
+    const words = text.split(/(\s+)/);
     let currentLine = '';
 
     for (const word of words) {
@@ -95,7 +106,17 @@ export async function convertToPdf(formData: FormData) {
         } else if (fileType === 'image/bmp') {
           const bmpData = bmp.decode(Buffer.from(arrayBuffer));
           const png = new PNG({ width: bmpData.width, height: bmpData.height });
-          png.data = bmpData.data;
+          // The bmp-js library provides data in ABGR format, PNG needs RGBA.
+          for (let i = 0; i < bmpData.data.length; i += 4) {
+              const a = bmpData.data[i];
+              const b = bmpData.data[i + 1];
+              const g = bmpData.data[i + 2];
+              const r = bmpData.data[i + 3];
+              png.data[i] = r;
+              png.data[i + 1] = g;
+              png.data[i + 2] = b;
+              png.data[i + 3] = a;
+          }
           const pngBuffer = PNG.sync.write(png);
           image = await newPdf.embedPng(pngBuffer);
         } else if (fileType === 'image/gif') {
@@ -109,6 +130,7 @@ export async function convertToPdf(formData: FormData) {
             const { width, height } = frame.dims;
 
             const png = new PNG({ width, height });
+            // frame.patch is a byte array of the frame's pixel data
             png.data = Buffer.from(frame.patch);
             const pngBuffer = PNG.sync.write(png);
             image = await newPdf.embedPng(pngBuffer);
@@ -144,20 +166,26 @@ export async function convertToPdf(formData: FormData) {
             let fullText = '';
             const slidePromises: Promise<void>[] = [];
 
-            zip.folder('ppt/slides')?.forEach((_, file) => {
+            zip.folder('ppt/slides')?.forEach((relativePath, file) => {
               if (file.name.endsWith('.xml')) {
                   slidePromises.push(
                       file.async('text').then(content => {
                           const textNodes = content.match(/<a:t>.*?<\/a:t>/g) || [];
                           const slideText = textNodes.map(node => node.replace(/<a:t>(.*?)<\/a:t>/, '$1')).join(' ');
-                          fullText += slideText + '\n\n'; // Add newlines between slides
+                          if (slideText.trim()) {
+                            fullText += slideText + '\n\n'; // Add newlines between slides
+                          }
                       })
                   );
               }
             });
 
             await Promise.all(slidePromises);
-            await addTextToPdf(newPdf, fullText);
+            if(fullText.trim()){
+              await addTextToPdf(newPdf, fullText);
+            } else {
+              await addTextToPdf(newPdf, 'No text content could be extracted from this PowerPoint file.');
+            }
           } catch(e) {
             // Fallback for older .ppt or complex files
             await addTextToPdf(newPdf, 'PowerPoint to PDF conversion is limited. Only text from .pptx files is extracted. Formatting and images are not preserved.');
